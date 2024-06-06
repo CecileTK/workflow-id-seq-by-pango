@@ -1,0 +1,15 @@
+name: idseq
+channels:
+  - conda-forge
+  - defaults
+  - bioconda
+dependencies:
+  - snakemake
+  - sed
+  - tsv-utils
+  - seqkit
+  - pairsnp
+  - r-base=4.3.3
+  - r-tidyverse
+  - r-argparse
+  - r-igraph

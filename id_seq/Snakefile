@@ -1,0 +1,260 @@
+configfile: "../config/config_idseq.yaml"
+SCENARIOS = config["files"]["scenarios"]
+PANGO_NAMES = [line.strip() for line in open("../generate_config/results/all_pango_names.txt")]
+
+rule all:
+    input:
+        metadata = expand("results/metadata/metadata_{scenario}.tsv.zst", scenario = SCENARIOS),
+        strain_names = expand("results/strain_names/pango_strain_names_{pango}.txt", pango = PANGO_NAMES),
+        df_distance_combined = expand("results/distance_aggregated/combined_df_distance_{scenario}.tsv.zst", scenario = SCENARIOS),
+        df_identical_pairs_combined = expand("results/distance_aggregated/combined_df_identical_pairs_{scenario}.tsv.zst", scenario = SCENARIOS),
+        df_cluster_alloc_combined = expand("results/distance_aggregated/combined_df_cluster_alloc_{scenario}.tsv.zst", scenario = SCENARIOS)
+
+rule files:
+    params:
+        threshold = "2",
+        metadata = "../data/metadata.tsv",
+        alignment = "../data/aligned.fasta.zst",
+        threads_distance_computation = 5,
+        threads_cluster_alloc = 2,
+        coverage_threshold = "0.9"
+
+files = rules.files.params
+
+rule subset_metadata:
+    message:
+        """
+        Generate metadata file for each scenario (based on the filter rule defined in the config file)
+        along with a text file containing associated strain names
+        """
+    input:
+        metadata = files.metadata,
+    output:
+        metadata = temp("results/metadata/metadata_{scenario}.tsv"),
+        strain_names = "results/strain_names/strain_names_{scenario}.txt"
+    benchmark:
+        "benchmarks/subset_metadata_{scenario}.txt"
+    params:
+        include = lambda wildcards: config["builds"][wildcards.scenario]["filter"],
+        coverage_threshold = files.coverage_threshold,
+    shell:
+        """
+        tsv-filter -H --str-eq {params.include} --is-numeric coverage --ge coverage:{params.coverage_threshold} {input.metadata} >> {output.metadata}
+        tsv-select -H -f strain {output.metadata} | sed 1d >> {output.strain_names}
+        """
+
+rule strain_names_by_pango:
+    message:
+        """
+        Generate a strain names file for each pango lineage (based on the filter rule defined in the config file)
+        """
+    input:
+        metadata = files.metadata,
+    output:
+        strain_names = "results/strain_names/pango_strain_names_{pango}.txt"
+    benchmark:
+        "benchmarks/strain_names_by_pango_{pango}.txt"
+    shell:
+        """
+        tsv-filter -H --str-eq Nextclade_pango:{wildcards.pango} {input.metadata} | tsv-select -H -f strain | sed 1d >> {output.strain_names}
+        """
+
+rule distance_by_pango_scenario:
+    message:
+        """
+        Generate distance between pairs of sequences and save those less than {files.threshold} mutations away
+        within each pango lineage and each. This first requires converting ambiguous sites to N's. 
+        """
+    input:
+        alignment = files.alignment,
+        strain_names_scenario = rules.subset_metadata.output.strain_names,
+        strain_names_pango = rules.strain_names_by_pango.output.strain_names
+    output:
+        df_distance = temp("results/distance_by_pango/df_distance_{scenario}_pango_{pango}.tsv"),
+        alignment = temp("results/alignment/tmp_alignment_{scenario}_pango_{pango}.fasta"),
+        alignment_with_ambiguity = temp("results/alignment/tmp_alignment_ambiguity_{scenario}_pango_{pango}.fasta"),
+    benchmark:
+        "benchmarks/distance_by_pango_scenario_{scenario}_pango_{pango}.txt"
+    params:
+        threshold = files.threshold,
+        tmp_df_distance = "results/distance_by_pango/tmp_df_distances_{scenario}_pango_{pango}.tsv",
+    threads: files.threads_distance_computation
+    shell:
+        """
+        seqkit grep --pattern-file {input.strain_names_scenario} {input.alignment} \
+            | seqkit grep --pattern-file {input.strain_names_pango} \
+            > {output.alignment_with_ambiguity}
+        
+        sed  '/^[^>]/ s/[^AGTC^-]/N/g' {output.alignment_with_ambiguity} > {output.alignment}
+
+        pairsnp -s -d {params.threshold} -t {threads} {output.alignment} > {output.df_distance}
+        (echo "strain_1\tstrain_2\tn_mutations" && cat {output.df_distance}) > {params.tmp_df_distance}
+        mv {params.tmp_df_distance} {output.df_distance}
+        
+        """
+
+rule aggregate_distance_by_scenario:
+    message:
+        """
+        Aggregate the dataframes with pairwise distance between pairs of sequences for each scenario
+        """
+    input: 
+        df_distances = lambda wildcards: expand("results/distance_by_pango/df_distance_{scenario}_pango_{curr_pango}.tsv", curr_pango = PANGO_NAMES, scenario = wildcards.scenario), 
+    output:
+        df_distance_combined = temp("results/distance_aggregated/combined_df_distance_{scenario}.tsv"),
+    benchmark:
+        "benchmarks/aggregate_distance_by_scenario_{scenario}.txt"
+    shell:
+        """
+        tsv-append -H {input.df_distances} > {output.df_distance_combined}
+        """
+
+rule pairs_identical_sequences_by_scenario:
+    message:
+        """
+        Getting dataframe with pairs of identical sequences
+        """
+    input:
+        df_distance = rules.aggregate_distance_by_scenario.output.df_distance_combined,
+    output:
+        df_identical_pairs = temp("results/distance_aggregated/combined_df_identical_pairs_{scenario}.tsv")
+    benchmark:
+        "benchmarks/pairs_identical_sequences_by_scenario_{scenario}.txt"
+    shell:
+        """
+        tsv-filter -H --eq n_mutations:0 {input.df_distance} > {output.df_identical_pairs}
+        """
+
+rule pairs_identical_sequences_by_pango_scenario:
+    message:
+        """
+        Getting dataframe with pairs of identical sequences
+        """
+    input:
+        df_distance = rules.distance_by_pango_scenario.output.df_distance,
+    output:
+        df_identical_pairs = temp("results/distance_by_pango/df_identical_pairs_{scenario}_pango_{pango}.tsv")
+    benchmark:
+        "benchmarks/pairs_identical_sequences_by_pango_scenario_{scenario}_pango_{pango}.txt"
+    shell:
+        """
+        tsv-filter -H --eq n_mutations:0 {input.df_distance} > {output.df_identical_pairs}
+        """
+
+rule cluster_identical_sequences_by_pango_scenario:
+    message:
+        """
+        Generate clusters of identical sequences by pango lineage
+        """
+    input:
+        df_identical_pairs = rules.pairs_identical_sequences_by_pango_scenario.output.df_identical_pairs,
+    output:
+        cluster_alloc = temp("results/distance_by_pango/df_cluster_alloc_{scenario}_pango_{pango}.tsv")
+    threads: files.threads_cluster_alloc,
+    benchmark:
+        "benchmarks/cluster_identical_sequences_by_pango_scenario_{scenario}_pango_{pango}.txt"
+    shell:
+        r"""
+        Rscript ./scripts/cluster_alloc.R \
+            --df_id_seq {input.df_identical_pairs} \
+            --cluster_alloc {output.cluster_alloc} \
+            --pango {wildcards.pango}
+        """
+
+
+rule aggregate_cluster_identical_sequences:
+    message:
+        """
+        Aggregate clusters of identical sequences for each scenario and across pango lineage
+        """
+    input:
+        df_cluster_allocs = lambda wildcards: expand("results/distance_by_pango/df_cluster_alloc_{scenario}_pango_{curr_pango}.tsv", curr_pango = PANGO_NAMES, scenario = wildcards.scenario), 
+    output:
+        df_cluster_alloc_combined = temp("results/distance_aggregated/combined_df_cluster_alloc_{scenario}.tsv")
+    benchmark:
+        "benchmarks/aggregate_cluster_identical_sequences_{scenario}.txt"
+    shell:
+        """
+        tsv-append -H {input.df_cluster_allocs} > {output.df_cluster_alloc_combined}
+        """
+
+rule compress_metadata:
+    message:
+        """
+        Compress metadata output tsv
+        """
+    input:
+        metadata = rules.subset_metadata.output.metadata,
+    output:
+        metadata = "results/metadata/metadata_{scenario}.tsv.zst",
+    benchmark:
+        "benchmarks/compress_metadata_{scenario}.txt"
+    shell:
+        """
+        zstd -c {input.metadata} > {output.metadata}
+        """
+    
+rule compress_df_distance:
+    message:
+        """
+        Compress output tsv from aggregate_distance_by_scenario
+        """
+    input:
+        df_distance_combined = rules.aggregate_distance_by_scenario.output.df_distance_combined 
+    output:
+        df_distance_combined = "results/distance_aggregated/combined_df_distance_{scenario}.tsv.zst"
+    benchmark:
+        "benchmarks/compress_df_distance_{scenario}.txt"
+    shell:
+        """
+        zstd -c {input.df_distance_combined} > {output.df_distance_combined}
+        """
+
+rule compress_df_identical_pairs:
+    message:
+        """
+        Compress output tsv from pairs_identical_sequences_by_scenario
+        """
+    input:
+        df_identical_pairs_combined = rules.pairs_identical_sequences_by_scenario.output.df_identical_pairs
+    output:
+        df_identical_pairs_combined = "results/distance_aggregated/combined_df_identical_pairs_{scenario}.tsv.zst"
+    benchmark:
+        "benchmarks/compress_df_identical_pairs_{scenario}.txt"
+    shell:
+        """
+        zstd -c {input.df_identical_pairs_combined} > {output.df_identical_pairs_combined}
+        """
+
+rule compress_df_cluster_alloc:
+    message:
+        """
+        Compress output tsv from aggregate_cluster_identical_sequences
+        """
+    input:
+        df_cluster_alloc_combined = rules.aggregate_cluster_identical_sequences.output.df_cluster_alloc_combined,
+    output:
+        df_cluster_alloc_combined = "results/distance_aggregated/combined_df_cluster_alloc_{scenario}.tsv.zst",
+    benchmark:
+        "benchmarks/compress_df_cluster_alloc_{scenario}.txt"
+    shell:
+        """
+        zstd -c {input.df_cluster_alloc_combined} > {output.df_cluster_alloc_combined}
+        """
+
+rule curate_cluster_alloc:
+    message:
+        """
+        Compress output tsv from aggregate_cluster_identical_sequences
+        """
+    input:
+        df_cluster_alloc_combined = rules.compress_df_cluster_alloc.output.df_cluster_alloc_combined,
+        metadata = rules.compress_metadata.output.metadata,
+    output:
+        curated_df = "results/distance_aggregated/combined_df_cluster_alloc_with_metadata_{scenario}.tsv.zst",
+    benchmark:
+        "benchmarks/curate_cluster_alloc_{scenario}.txt"
+    shell:
+        """
+        zstd -c {input.df_cluster_alloc_combined} > {output.df_cluster_alloc_combined}
+        """

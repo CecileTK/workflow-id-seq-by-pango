@@ -1,0 +1,9 @@
+files:
+  scenarios: ["France", "Africa"]
+  
+builds:
+  France:
+    filter: 'country:"France"'
+  Africa:
+    filter: 'region:"Africa"'
+  

@@ -1,0 +1,19 @@
+rule all:
+    input:
+        pango_names = "results/all_pango_names.txt"
+
+rule get_pango_lineages:
+    message:
+        """
+        Generate a vector with the name of all the pango lineages in the metadata
+        """
+    input:
+        metadata = "../data/metadata.tsv",
+    output:
+        pango_names = "results/all_pango_names.txt",
+    params: 
+        empty_string = "B.1.1.7"
+    shell:
+        """
+        tsv-select -H -f Nextclade_pango {input.metadata} | tsv-uniq | tsv-filter -H --not-empty Nextclade_pango | sed 1d >> {output.pango_names}
+        """
