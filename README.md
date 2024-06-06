@@ -74,7 +74,7 @@ The workflow can  launched directly from the commandline using:
 
 ```bash
 # Change the working directory
-cd generate_config/
+cd id_seq/
 
 # Activate the environement
 source activate idseq
@@ -86,7 +86,7 @@ ml snakemake/7.18.2-foss-2021b
 snakemake --use-conda -j 10 --profile ../profiles/
 ```
 
-or using a bash file to launch a job that will initiate the scheduling:
+or using a bash file to launch a job that will initiate the scheduling (here on the Hutch cluster):
 
 ```bash
 sbatch launch_schedule.sh
