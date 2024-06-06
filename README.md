@@ -50,7 +50,7 @@ conda env remove --name idseq
 ### Running the workflow
 The workflow is split into two parts:
 - `generate_config` that will list all the pango lineages present in the metadata.
-- `id_seq` that will generate clusters of identical sequences for the config defined in `config/config.yaml` using the pango lineages summarised by the `generate_config` part of the workflow.
+- `id_seq` that will generate clusters of identical sequences for the config defined in `config/config_idseq.yaml` using the pango lineages summarised by the `generate_config` part of the workflow.
 
 ### `generate_config`
 The workflow can  launched directly from the commandline using:
