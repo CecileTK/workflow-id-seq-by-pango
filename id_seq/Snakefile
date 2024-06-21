@@ -73,6 +73,7 @@ rule distance_by_pango_scenario:
         df_distance = temp("results/distance_by_pango/df_distance_{scenario}_pango_{pango}.tsv"),
         alignment = temp("results/alignment/tmp_alignment_{scenario}_pango_{pango}.fasta"),
         alignment_with_ambiguity = temp("results/alignment/tmp_alignment_ambiguity_{scenario}_pango_{pango}.fasta"),
+        strain_names = temp("results/alignment/strain_names_{scenario}_pango_{pango}.txt")
     benchmark:
         "benchmarks/distance_by_pango_scenario_{scenario}_pango_{pango}.txt"
     params:
@@ -91,6 +92,7 @@ rule distance_by_pango_scenario:
         (echo "strain_1\tstrain_2\tn_mutations" && cat {output.df_distance}) > {params.tmp_df_distance}
         mv {params.tmp_df_distance} {output.df_distance}
         
+        seqkit seq -n {output.alignment} > {output.strain_names}
         """
 
 rule aggregate_distance_by_scenario:
@@ -148,6 +150,7 @@ rule cluster_identical_sequences_by_pango_scenario:
         """
     input:
         df_identical_pairs = rules.pairs_identical_sequences_by_pango_scenario.output.df_identical_pairs,
+        strain_names = rules.distance_by_pango_scenario.strain_names.
     output:
         cluster_alloc = temp("results/distance_by_pango/df_cluster_alloc_{scenario}_pango_{pango}.tsv")
     threads: files.threads_cluster_alloc,
@@ -155,7 +158,8 @@ rule cluster_identical_sequences_by_pango_scenario:
         "benchmarks/cluster_identical_sequences_by_pango_scenario_{scenario}_pango_{pango}.txt"
     shell:
         r"""
-        Rscript ./scripts/cluster_alloc.R \
+        Rscript ./scripts/cluster_alloc_from_pairsnp.R \
+            --vec_strain_names {input.strain_names} \ 
             --df_id_seq {input.df_identical_pairs} \
             --cluster_alloc {output.cluster_alloc} \
             --pango {wildcards.pango}
