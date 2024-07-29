@@ -150,7 +150,7 @@ rule cluster_identical_sequences_by_pango_scenario:
         """
     input:
         df_identical_pairs = rules.pairs_identical_sequences_by_pango_scenario.output.df_identical_pairs,
-        strain_names = rules.distance_by_pango_scenario.strain_names.
+        strain_names = rules.distance_by_pango_scenario.output.strain_names,
     output:
         cluster_alloc = temp("results/distance_by_pango/df_cluster_alloc_{scenario}_pango_{pango}.tsv")
     threads: files.threads_cluster_alloc,
